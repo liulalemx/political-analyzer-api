@@ -1,5 +1,5 @@
 # main.py
-
+import os
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 from typing import List, Optional, Literal
@@ -13,6 +13,9 @@ from startup import download_and_extract_models
 app = FastAPI(title="Political Leaning Dashboard API")
 
 download_and_extract_models()
+
+print("Current directory:", os.getcwd())
+print("Files in model dir:", os.listdir("path/to/model/dir"))
 
 # -----------------------------------------------------------------------------
 # 1. Load & register models
