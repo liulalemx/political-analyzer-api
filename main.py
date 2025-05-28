@@ -15,7 +15,7 @@ app = FastAPI(title="Political Leaning Dashboard API")
 download_and_extract_models()
 
 print("Current directory:", os.getcwd())
-print("Files in model dir:", os.listdir("path/to/model/dir"))
+print("Files in model dir:", os.listdir("./models"))
 
 # -----------------------------------------------------------------------------
 # 1. Load & register models
