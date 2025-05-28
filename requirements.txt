@@ -7,3 +7,4 @@ mastodon.py
 python-multipart
 python-dotenv
 gdown
+torch
