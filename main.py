@@ -11,14 +11,17 @@ from mastodon_client import get_user_info_and_posts
 from startup import download_and_extract_models
 from fastapi.middleware.cors import CORSMiddleware
 
+# Read frontend URL from environment variable, fallback to '*' if not set
+frontend_url = os.getenv("FRONTEND_URL", "*")
+
 app = FastAPI(title="Political Leaning Dashboard API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Or specify your frontend URL(s)
-    allow_credentials=True,
+    allow_origins=[frontend_url] if frontend_url != "*" else ["*"],
+    allow_credentials=False,
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["*"]
 )
 
 download_and_extract_models()
