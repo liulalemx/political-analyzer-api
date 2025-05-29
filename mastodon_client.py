@@ -42,6 +42,15 @@ def get_user_info_and_posts(username: str, limit=50):
             }
             for s in statuses
         ]
+        num_posts = len(posts)
+
+        # Calculate average engagement rate (sum of engagement / num_posts)
+        if posts:
+            avg_engagement = sum(
+                p["favourites_count"] + p["reblogs_count"] + p["replies_count"] for p in posts
+            ) / num_posts
+        else:
+            avg_engagement = 0
 
         # Build user profile info
         user_info = {
@@ -55,6 +64,8 @@ def get_user_info_and_posts(username: str, limit=50):
             "followers_count": acct_info['followers_count'],
             "following_count": acct_info['following_count'],
             "statuses_count": acct_info['statuses_count'],
+            "num_posts": num_posts,
+            "avg_engagement": avg_engagement,
             "posts": posts
         }
 

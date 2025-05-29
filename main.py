@@ -9,8 +9,17 @@ import pickle, re, numpy as np, pandas as pd
 from transformers import pipeline, AutoTokenizer, AutoModelForSequenceClassification
 from mastodon_client import get_user_info_and_posts
 from startup import download_and_extract_models
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="Political Leaning Dashboard API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Or specify your frontend URL(s)
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 download_and_extract_models()
 
@@ -119,8 +128,23 @@ def analyze_posts(posts: List[Post], model_key: str):
     texts = [preprocess(p.text) for p in posts]
     labels, scores = predictor(texts)
 
+    # Prepare original posts for lookup (result is always defined in analyze_posts caller)
+    orig_posts = []
+    import inspect
+    frame = inspect.currentframe()
+    while frame:
+        if 'result' in frame.f_locals:
+            orig_posts = frame.f_locals['result'].get('posts', [])
+            break
+        frame = frame.f_back
     per_post = []
     for p, lab, sc in zip(posts, labels, scores):
+        orig = None
+        for post_dict in orig_posts:
+            if (getattr(p, "timestamp", None) == post_dict.get("created_at") and
+                getattr(p, "text", None) == post_dict.get("content")):
+                orig = post_dict
+                break
         per_post.append({
             "text": p.text,
             "timestamp": p.timestamp,
@@ -128,6 +152,9 @@ def analyze_posts(posts: List[Post], model_key: str):
             "category": p.category,
             "label": int(lab),
             "confidence": float(sc),
+            "id": orig["id"] if orig else None,
+            "favourites_count": orig["favourites_count"] if orig else None,
+            "reblogs_count": orig["reblogs_count"] if orig else None
         })
 
     overall = float(np.mean(labels)) if len(labels) > 0 else None
@@ -155,80 +182,105 @@ def analyze_user(
 
     per_post, overall, breakdown = analyze_posts(post_objs, model_name)
 
-    return {
+    # Compute bias label from overall score
+    bias_map = {
+        0: "extreme right",
+        1: "center right",
+        2: "center",
+        3: "center left",
+        4: "extreme left"
+    }
+    avg_label = round(overall) if overall is not None else None
+    bias_label = bias_map.get(avg_label, None)
+
+    # Compute average confidence
+    avg_confidence = float(np.mean([p["confidence"] for p in per_post])) if per_post else None
+
+    # --- Engagement by Bias Label ---
+    df = pd.DataFrame(per_post)
+    if not df.empty:
+        engagement_by_label = {str(i): None for i in range(5)}
+        group = df.groupby("label")["engagement"].mean()
+        for i in range(5):
+            if i in group.index:
+                engagement_by_label[str(i)] = float(group[i])
+    else:
+        engagement_by_label = {str(i): None for i in range(5)}
+
+    # --- Time Series Analysis ---
+    if not df.empty:
+        df["date"] = pd.to_datetime(df["timestamp"]).dt.date
+        daily = df.groupby("date").agg(
+            post_count=("text", "size"),
+            avg_bias=("label", "mean")
+        ).reset_index()
+        time_series = {
+            "dates": daily["date"].astype(str).tolist(),
+            "post_counts": daily["post_count"].tolist(),
+            "avg_bias": daily["avg_bias"].tolist()
+        }
+    else:
+        time_series = {"dates": [], "post_counts": [], "avg_bias": []}
+
+    # --- Category Bias ---
+    if not df.empty:
+        cat_bias = df.dropna(subset=["category"]).groupby("category")["label"].mean().to_dict()
+    else:
+        cat_bias = {}
+
+    # Merge all user info except posts, and add analysis results
+    user_info = {k: v for k, v in result.items() if k != "posts"}
+    # Add num_posts from statuses_count if present
+    if "statuses_count" in result:
+        user_info["num_posts"] = result["statuses_count"]
+    user_info.update({
         "username": username,
         "model": model_name,
         "overall_score": overall,
         "breakdown": breakdown,
-        "per_post": per_post
-    }
+        "per_post": per_post,
+        "bias_label": bias_label,
+        "confidence": avg_confidence,
+        "engagement_by_label": engagement_by_label,
+        "time_series": time_series,
+        "category_bias": cat_bias
+    })
+    return user_info
 
-@app.post("/stats/time_series")
-def time_series(
-    username: str = Query(...),
+@app.post("/analyze/text")
+def analyze_text(
+    text: str = Query(...),
     model_name: str = Query(default="classical")
 ):
-    result = get_user_info_and_posts(username)
-    posts = result.get("posts", []) if isinstance(result, dict) else []
-
-    if not posts:
-        return {"error": "User not found or no posts"}
-
-    post_objs = [mastodon_post_to_post(p) if isinstance(p, dict) else p for p in posts]
-
-    per_post, _, _ = analyze_posts(post_objs, model_name)
-    df = pd.DataFrame(per_post)
-    df["date"] = pd.to_datetime(df["timestamp"]).dt.date
-    daily = df.groupby("date").agg(
-        post_count=("text", "size"),
-        avg_bias=("label", "mean")
-    ).reset_index()
+    # Preprocess and create a Post object
+    processed_text = preprocess(text)
+    category = assign_category(text)
+    post = Post(
+        text=text,
+        timestamp=datetime.now(),
+        engagement=0,
+        category=category
+    )
+    # Run model prediction
+    labels, scores = MODELS[model_name]["predict"]([processed_text])
+    label = int(labels[0])
+    confidence = float(scores[0])
+    bias_map = {
+        0: "extreme right",
+        1: "center right",
+        2: "center",
+        3: "center left",
+        4: "extreme left"
+    }
+    bias_label = bias_map.get(label, None)
     return {
-        "dates": daily["date"].astype(str).tolist(),
-        "post_counts": daily["post_count"].tolist(),
-        "avg_bias": daily["avg_bias"].tolist()
+        "text": text,
+        "model": model_name,
+        "label": label,
+        "bias_label": bias_label,
+        "confidence": confidence,
+        "category": category
     }
-
-@app.post("/stats/engagement_correlation")
-def engagement_correlation(
-    username: str = Query(...),
-    model_name: str = Query(default="classical")
-):
-    result = get_user_info_and_posts(username)
-    posts = result.get("posts", []) if isinstance(result, dict) else []
-
-    if not posts:
-        return {"error": "User not found or no posts"}
-
-    post_objs = [mastodon_post_to_post(p) if isinstance(p, dict) else p for p in posts]
-
-    per_post, _, _ = analyze_posts(post_objs, model_name)
-    df = pd.DataFrame(per_post)
-    corr = float(df["label"].corr(df["engagement"]))
-    return {
-        "bias_scores": df["label"].tolist(),
-        "engagements": df["engagement"].tolist(),
-        "correlation": corr
-    }
-
-@app.post("/stats/category_bias")
-def category_bias(
-    username: str = Query(...),
-    model_name: str = Query(default="classical")
-):
-    result = get_user_info_and_posts(username)
-    posts = result.get("posts", []) if isinstance(result, dict) else []
-
-    if not posts:
-        return {"error": "User not found or no posts"}
-
-    # Convert dicts to Post objects if needed
-    post_objs = [mastodon_post_to_post(p) if isinstance(p, dict) else p for p in posts]
-
-    per_post, _, _ = analyze_posts(post_objs, model_name)
-    df = pd.DataFrame(per_post).dropna(subset=["category"])
-    cat_bias = df.groupby("category")["label"].mean().to_dict()
-    return {"category_bias": cat_bias}
 
 @app.get("/user/raw")
 def get_user_raw(username: str = Query(...)):
