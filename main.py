@@ -45,7 +45,7 @@ roberta_pipe = pipeline(
     "text-classification",
     model=best_ckpt,
     tokenizer=tokenizer,
-    return_all_scores=False
+    top_k=1
 )
 
 # You can register more here...
