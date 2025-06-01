@@ -106,30 +106,22 @@ def mastodon_post_to_post(p):
 # -----------------------------------------------------------------------------
 # 3. Core analysis using selected model
 # -----------------------------------------------------------------------------
-def analyze_posts(posts: List[Post], model_key: str):
+def analyze_posts(posts: List[Post], model_key: str, orig_posts: list = None):
     if model_key not in MODELS:
         raise HTTPException(status_code=400, detail=f"Unknown model '{model_key}'")
     predictor = MODELS[model_key]["predict"]
     texts = [preprocess(p.text) for p in posts]
     labels, scores = predictor(texts)
 
-    # Prepare original posts for lookup (result is always defined in analyze_posts caller)
-    orig_posts = []
-    import inspect
-    frame = inspect.currentframe()
-    while frame:
-        if 'result' in frame.f_locals:
-            orig_posts = frame.f_locals['result'].get('posts', [])
-            break
-        frame = frame.f_back
+    # Build a lookup for original posts by (created_at, content)
+    orig_lookup = {
+        (p.get("created_at"), p.get("content")): p
+        for p in (orig_posts or [])
+    }
+
     per_post = []
     for p, lab, sc in zip(posts, labels, scores):
-        orig = None
-        for post_dict in orig_posts:
-            if (getattr(p, "timestamp", None) == post_dict.get("created_at") and
-                getattr(p, "text", None) == post_dict.get("content")):
-                orig = post_dict
-                break
+        orig = orig_lookup.get((getattr(p, "timestamp", None), getattr(p, "text", None)))
         per_post.append({
             "text": p.text,
             "timestamp": p.timestamp,
@@ -165,7 +157,7 @@ def analyze_user(
     # Convert dicts to Post objects if needed
     post_objs = [mastodon_post_to_post(p) if isinstance(p, dict) else p for p in posts]
 
-    per_post, overall, breakdown = analyze_posts(post_objs, model_name)
+    per_post, overall, breakdown = analyze_posts(post_objs, model_name, posts)
 
     # Compute bias label from overall score
     bias_map = {
