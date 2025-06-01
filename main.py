@@ -6,7 +6,6 @@ from typing import List, Optional, Literal
 from datetime import datetime
 from collections import Counter
 import pickle, re, numpy as np, pandas as pd
-from transformers import pipeline, AutoTokenizer, AutoModelForSequenceClassification
 from mastodon_client import get_user_info_and_posts
 from startup import download_and_extract_models
 from fastapi.middleware.cors import CORSMiddleware
@@ -38,28 +37,11 @@ with open("./models/tfidf_vectorizer.pkl", "rb") as f:
 with open("./models/lr_model.pkl", "rb") as f:
     lr_model = pickle.load(f)
 
-# Transformer pipeline (fine-tuned)
-best_ckpt = "./models/distilroberta-base/content/results/checkpoint-368"  # or the folder with the best model
-tokenizer = AutoTokenizer.from_pretrained(best_ckpt)
-roberta_pipe = pipeline(
-    "text-classification",
-    model=best_ckpt,
-    tokenizer=tokenizer,
-    top_k=1
-)
-
-# You can register more here...
 MODELS = {
     "classical": {
         "predict": lambda texts: (
             lr_model.predict(tfidf.transform(texts)),
             lr_model.predict_proba(tfidf.transform(texts)).max(axis=1)
-        )
-    },
-    "transformer": {
-        "predict": lambda texts: (
-            [int(r["label"].split("_")[-1]) for r in roberta_pipe(texts, truncation=True)],
-            [r["score"] for r in roberta_pipe(texts, truncation=True)]
         )
     }
 }
@@ -109,7 +91,7 @@ class Post(BaseModel):
 
 class AnalyzeRequest(BaseModel):
     username: str
-    model: Literal["classical","transformer"]
+    model: Literal["classical"]
     posts: List[Post]
 
 def mastodon_post_to_post(p):
